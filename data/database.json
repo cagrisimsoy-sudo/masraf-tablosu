@@ -1,0 +1,67 @@
+{
+  "users": [
+    {
+      "id": "denizer",
+      "name": "Denizer",
+      "pin": "1234",
+      "color": "#8b5cf6",
+      "avatar": "D"
+    },
+    {
+      "id": "cagri",
+      "name": "Çağrı",
+      "pin": "1234",
+      "color": "#3b82f6",
+      "avatar": "Ç"
+    },
+    {
+      "id": "saliha",
+      "name": "Saliha",
+      "pin": "1234",
+      "color": "#10b981",
+      "avatar": "S"
+    },
+    {
+      "id": "selda",
+      "name": "Selda",
+      "pin": "1234",
+      "color": "#ec4899",
+      "avatar": "S"
+    }
+  ],
+  "expenses": [
+    {
+      "id": "exp_1",
+      "date": "2026-10-20",
+      "payer": "Çağrı",
+      "payerId": "cagri",
+      "description": "Süpermarket toplu mutfak ve kahvaltı alışverişi",
+      "category": "Market",
+      "quantity": 1,
+      "amount": 1640.0,
+      "createdAt": "2026-10-20T14:30:00.000Z"
+    },
+    {
+      "id": "exp_2",
+      "date": "2026-10-21",
+      "payer": "Denizer",
+      "payerId": "denizer",
+      "description": "Damacana Su & İçecekler",
+      "category": "Mutfak",
+      "quantity": 3,
+      "amount": 420.0,
+      "createdAt": "2026-10-21T11:15:00.000Z"
+    },
+    {
+      "id": "exp_3",
+      "date": "2026-10-22",
+      "payer": "Saliha",
+      "payerId": "saliha",
+      "description": "Ortak Ev Temizlik Malzemeleri",
+      "category": "Ev",
+      "quantity": 1,
+      "amount": 780.0,
+      "createdAt": "2026-10-22T16:45:00.000Z"
+    }
+  ]
+}
