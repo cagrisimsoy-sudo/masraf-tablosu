@@ -15,7 +15,7 @@
   
   <link rel="icon" type="image/svg+xml" href="/icons/icon.svg">
   <link rel="manifest" href="/manifest.json">
-  <link rel="stylesheet" href="/index.css">
+  <link rel="stylesheet" href="/index.css?v=3">
 </head>
 <body>
   <div class="app-wrapper">
@@ -51,6 +51,12 @@
             <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
             <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
           </svg>
+        </button>
+
+        <!-- Admin / Master Access Button -->
+        <button class="btn btn-secondary admin-trigger-btn" id="adminTriggerBtn" title="Yönetici (Admin) Girişi" onclick="openAdminModal()">
+          <span class="admin-badge-icon">👑</span>
+          <span class="admin-btn-text" id="adminBtnText">Yönetici</span>
         </button>
 
         <a href="/api/export/csv" class="btn btn-secondary btn-icon-only" title="Excel / CSV İndir">
@@ -101,18 +107,37 @@
         </div>
       </section>
 
-      <!-- 4 PARTICIPANT BALANCE CARDS -->
+      <!-- HARCAMA DAĞILIMI (KİŞİLER VEYA KATEGORİLER / TÜRLER) -->
       <section class="section-container">
         <div class="section-header">
-          <h2 class="section-title">Kişi Bazlı Yapılan Harcamalar</h2>
+          <div>
+            <h2 class="section-title" id="breakdownSectionTitle">Harcama Dağılımı ve Analizi</h2>
+            <p class="section-hint" id="breakdownSectionHint">Kişilere veya harcama türlerine (kategorilere) göre harcama dağılımı</p>
+          </div>
+
+          <!-- View Switcher Tabs -->
+          <div class="view-switcher" role="tablist">
+            <button class="view-switch-btn active" id="viewBtnParticipants" onclick="switchBreakdownView('participants')">
+              <span>👥 Kişi Bazlı</span>
+            </button>
+            <button class="view-switch-btn" id="viewBtnCategories" onclick="switchBreakdownView('categories')">
+              <span>🏷️ Harcama Türü (Kategori) Bazlı</span>
+            </button>
+          </div>
         </div>
 
+        <!-- 1. Kişi Bazlı Kartlar -->
         <div class="participants-grid" id="participantsGrid">
           <!-- Dynamically filled with Denizer, Çağrı, Saliha, Selda cards -->
           <div class="skeleton-card"></div>
           <div class="skeleton-card"></div>
           <div class="skeleton-card"></div>
           <div class="skeleton-card"></div>
+        </div>
+
+        <!-- 2. Harcama Türü / Kategori Bazlı Kartlar -->
+        <div class="categories-grid hidden" id="categoriesGrid">
+          <!-- Dynamically rendered category cards -->
         </div>
       </section>
 
@@ -124,17 +149,37 @@
               <circle cx="11" cy="11" r="8"></circle>
               <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
             </svg>
-            <input type="text" id="searchInput" placeholder="Harcama veya açıklama ara..." oninput="handleSearch()">
+            <input type="text" id="searchInput" placeholder="Harcama, kategori veya açıklama ara..." oninput="handleSearch()">
           </div>
 
-          <!-- Filter Pills -->
-          <div class="filter-pills" id="filterPills">
-            <button class="pill active" data-filter="all" onclick="setFilter('all')">Tümü</button>
-            <button class="pill" data-filter="denizer" onclick="setFilter('denizer')">Denizer</button>
-            <button class="pill" data-filter="cagri" onclick="setFilter('cagri')">Çağrı</button>
-            <button class="pill" data-filter="saliha" onclick="setFilter('saliha')">Saliha</button>
-            <button class="pill" data-filter="selda" onclick="setFilter('selda')">Selda</button>
+          <!-- Kişi Filtresi Pills -->
+          <div class="filter-pills-row">
+            <span class="filter-row-label">Kişi:</span>
+            <div class="filter-pills" id="filterPills">
+              <button class="pill active" data-filter="all" onclick="setFilter('all')">Tüm Kişiler</button>
+              <button class="pill" data-filter="denizer" onclick="setFilter('denizer')">Denizer</button>
+              <button class="pill" data-filter="cagri" onclick="setFilter('cagri')">Çağrı</button>
+              <button class="pill" data-filter="saliha" onclick="setFilter('saliha')">Saliha</button>
+              <button class="pill" data-filter="selda" onclick="setFilter('selda')">Selda</button>
+            </div>
           </div>
+        </div>
+
+        <!-- Harcama Türü / Kategori Filtresi Bar -->
+        <div class="category-filter-toolbar">
+          <span class="filter-row-label">Harcama Türü:</span>
+          <div class="category-pills" id="categoryFilterPills">
+            <!-- Dynamic Category Pills from data -->
+          </div>
+        </div>
+
+        <!-- Active Filter Status & Reset Banner -->
+        <div class="active-filter-banner hidden" id="activeFilterBanner">
+          <div class="active-filter-info">
+            <span class="active-filter-icon">🔍</span>
+            <span id="activeFilterSummary">Filtrelenen Harcamalar</span>
+          </div>
+          <button class="clear-filters-btn" onclick="clearAllFilters()">Tüm Filtreleri Temizle ✕</button>
         </div>
 
         <!-- Table Desktop / Cards Mobile Container -->
@@ -322,7 +367,8 @@
       <div class="modal-body">
         <p id="pinPromptMessage" class="modal-description">Bu işlem için harcamayı yapan kişinin PIN kodu gerekmektedir.</p>
         <div class="form-group mt-3">
-          <input type="password" id="pinPromptInput" class="form-input" placeholder="4 Haneli PIN (Varsayılan: 1234)" maxlength="6" inputmode="numeric">
+          <input type="password" id="pinPromptInput" class="form-input" placeholder="4 Haneli PIN (Varsayılan: 1234)" maxlength="8" inputmode="numeric">
+          <div class="pin-hint-sub">💡 Not: Harcama sahibinin PIN kodu veya unutulma/hata durumunda Yönetici PIN'i (Varsayılan: 9999) geçerlidir.</div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" onclick="closePinPromptModal()">Vazgeç</button>
@@ -332,9 +378,106 @@
     </div>
   </div>
 
+  <!-- MODAL: ADMIN PANEL & PASSWORD RECOVERY -->
+  <div class="modal-overlay hidden" id="adminModal">
+    <div class="modal-box modal-lg">
+      <div class="modal-header">
+        <div class="modal-title-with-badge">
+          <span class="modal-crown">👑</span>
+          <h3 class="modal-title">Yönetici (Admin) Paneli</h3>
+          <span class="admin-status-badge" id="adminStatusBadge">Korumalı Mod</span>
+        </div>
+        <button class="close-btn" onclick="closeAdminModal()">&times;</button>
+      </div>
+
+      <!-- ADMIN STATE 1: LOGIN -->
+      <div class="admin-login-view" id="adminLoginView">
+        <div class="modal-body">
+          <div class="admin-login-banner">
+            <div class="admin-banner-icon">🛡️</div>
+            <div>
+              <h4>Yönetici Yetkilendirmesi</h4>
+              <p>Şifresini unutan kullanıcıların PIN kodlarını sıfırlayabilir, hatalı girilen tüm harcamaları yetki sınırı olmaksızın düzenleyebilir veya silebilirsiniz.</p>
+            </div>
+          </div>
+
+          <form id="adminLoginForm" onsubmit="handleAdminLoginSubmit(event)" class="mt-3">
+            <div class="form-group">
+              <label for="adminPinInput">Yönetici PIN Kodu (Varsayılan: 9999)</label>
+              <input type="password" id="adminPinInput" class="form-input" placeholder="Yönetici PIN Kodunu Giriniz" required maxlength="8" inputmode="numeric">
+              <span class="field-tip">Varsayılan Yönetici PIN: <strong>9999</strong> (İçeriden değiştirebilirsiniz)</span>
+            </div>
+
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" onclick="closeAdminModal()">İptal</button>
+              <button type="submit" class="btn btn-primary btn-gold">
+                <span>👑 Yönetici Olarak Giriş Yap</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- ADMIN STATE 2: DASHBOARD -->
+      <div class="admin-dashboard-view hidden" id="adminDashboardView">
+        <div class="modal-body">
+          <!-- Tab Nav -->
+          <div class="admin-tabs">
+            <button class="admin-tab active" data-tab="pins" onclick="switchAdminTab('pins')">🔑 Şifre Sıfırlama</button>
+            <button class="admin-tab" data-tab="actions" onclick="switchAdminTab('actions')">🛠️ Harcama Denetimi</button>
+            <button class="admin-tab" data-tab="settings" onclick="switchAdminTab('settings')">⚙️ Yönetici PIN Ayarı</button>
+          </div>
+
+          <!-- Tab 1: User PIN Reset -->
+          <div class="admin-tab-content" id="adminTabPins">
+            <p class="tab-desc">Kullanıcılardan biri şifresini unuttuysa, buradan tek tıkla şifresini varsayılana (<strong>1234</strong>) sıfırlayabilir veya dilediğiniz yeni bir şifre belirleyebilirsiniz:</p>
+            <div class="admin-users-list" id="adminUsersList">
+              <!-- Rendered by JS -->
+            </div>
+          </div>
+
+          <!-- Tab 2: Error Correction & Full Access Info -->
+          <div class="admin-tab-content hidden" id="adminTabActions">
+            <div class="admin-superpower-card">
+              <div class="superpower-icon">⚡</div>
+              <div>
+                <h4>Tam Yetkili Yönetici Modu Aktif</h4>
+                <p>Şu anda yönetici modundasınız. Ana sayfadaki harcama tablosunda dilediğiniz harcamanın yanındaki <strong>Düzenle</strong> veya <strong>Sil</strong> butonuna bastığınızda, kimin harcaması olursa olsun PIN doğrulaması gerekmeksizin doğrudan işlem yapabilirsiniz.</p>
+              </div>
+            </div>
+            <div class="admin-tip-box mt-3">
+              <span>💡</span>
+              <p>Hatalı girilmiş tutarlar, yanlış seçilmiş kişi veya mükerrer harcamalar için tablodaki "Düzenle" / "Sil" butonlarını kullanabilirsiniz.</p>
+            </div>
+          </div>
+
+          <!-- Tab 3: Admin Master PIN Change -->
+          <div class="admin-tab-content hidden" id="adminTabSettings">
+            <form id="adminChangePinForm" onsubmit="handleAdminChangePinSubmit(event)">
+              <div class="form-group">
+                <label for="adminCurrentPin">Mevcut Yönetici PIN (Varsayılan: 9999)</label>
+                <input type="password" id="adminCurrentPin" class="form-input" required maxlength="8" inputmode="numeric">
+              </div>
+              <div class="form-group">
+                <label for="adminNewPin">Yeni Yönetici PIN (En az 4 hane)</label>
+                <input type="password" id="adminNewPin" class="form-input" placeholder="Yeni Gizli Yönetici PIN" required minlength="4" maxlength="8" inputmode="numeric">
+              </div>
+              <button type="submit" class="btn btn-primary btn-sm mt-2">Yönetici PIN'ini Güncelle</button>
+            </form>
+          </div>
+
+          <div class="modal-footer space-between">
+            <button type="button" class="btn btn-secondary btn-danger-soft" onclick="logoutAdmin()">Yönetici Çıkışı Yap</button>
+            <button type="button" class="btn btn-secondary" onclick="closeAdminModal()">Kapat</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- TOAST NOTIFICATIONS -->
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="/app.js"></script>
+  <script src="/app.js?v=3"></script>
 </body>
 </html>

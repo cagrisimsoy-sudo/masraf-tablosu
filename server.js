@@ -14,7 +14,11 @@ const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://cagrisimsoy_db_use
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  }
+}));
 
 // --- Local JSON Database Helpers (Fallback & Backup) ---
 function readLocalDB() {
@@ -114,6 +118,46 @@ async function dbUpdateUserPin(userId, newPin) {
     u.pin = String(newPin);
     writeLocalDB(local);
   }
+}
+
+async function dbGetAdminPin() {
+  if (useMongo && mongoDb) {
+    try {
+      const s = await mongoDb.collection('settings').findOne({ key: 'adminPin' });
+      if (s && s.value) return String(s.value);
+    } catch (err) {
+      console.error('Error reading adminPin from Mongo:', err.message);
+    }
+  }
+  const local = readLocalDB();
+  return (local.settings && local.settings.adminPin) ? String(local.settings.adminPin) : (process.env.ADMIN_PIN || '9999');
+}
+
+async function dbSetAdminPin(newPin) {
+  if (useMongo && mongoDb) {
+    try {
+      await mongoDb.collection('settings').updateOne(
+        { key: 'adminPin' },
+        { $set: { key: 'adminPin', value: String(newPin), updatedAt: new Date().toISOString() } },
+        { upsert: true }
+      );
+    } catch (err) {
+      console.error('Error updating adminPin in Mongo:', err.message);
+    }
+  }
+  const local = readLocalDB();
+  local.settings = local.settings || {};
+  local.settings.adminPin = String(newPin);
+  writeLocalDB(local);
+}
+
+async function isAuthorized(userId, pin) {
+  if (!pin) return false;
+  const adminPin = await dbGetAdminPin();
+  if (String(pin).trim() === String(adminPin).trim()) return true;
+  const user = await dbGetUserById(userId);
+  if (!user) return false;
+  return user.pin && String(user.pin).trim() === String(pin).trim();
 }
 
 async function dbGetExpenses() {
@@ -219,7 +263,32 @@ function calculateSettlements(userBalances) {
   return transactions;
 }
 
-// API: Get all data with calculated balances & settlements
+// Category Metadata & Helpers
+const CATEGORY_META = {
+  'Sarf Malzeme': { icon: '📦', color: '#6366f1' },
+  'Makina ve/veya Parçaları': { icon: '🚜', color: '#f59e0b' },
+  'Tohum ve Giderleri': { icon: '🌱', color: '#10b981' },
+  'Yapı Giderleri': { icon: '🏗️', color: '#06b6d4' },
+  'Yakıt Giderleri': { icon: '⛽', color: '#ec4899' },
+  'Yemek Giderleri': { icon: '🍲', color: '#f97316' },
+  'Alet Edevat': { icon: '🔧', color: '#8b5cf6' },
+  'Diğer Harcamalar': { icon: '📝', color: '#64748b' }
+};
+
+function getCategoryMeta(catName) {
+  if (catName && CATEGORY_META[catName]) return CATEGORY_META[catName];
+  const lower = (catName || '').toLowerCase();
+  if (lower.includes('tohum') || lower.includes('gübre') || lower.includes('kükürt') || lower.includes('fide')) return { icon: '🌱', color: '#10b981' };
+  if (lower.includes('yakıt') || lower.includes('mazot') || lower.includes('benzin') || lower.includes('nakli')) return { icon: '⛽', color: '#ec4899' };
+  if (lower.includes('makina') || lower.includes('traktör') || lower.includes('motor')) return { icon: '🚜', color: '#f59e0b' };
+  if (lower.includes('yapı') || lower.includes('inşaat') || lower.includes('kereste') || lower.includes('tarh')) return { icon: '🏗️', color: '#06b6d4' };
+  if (lower.includes('yemek') || lower.includes('gıda') || lower.includes('mutfak') || lower.includes('içecek')) return { icon: '🍲', color: '#f97316' };
+  if (lower.includes('alet') || lower.includes('edevat') || lower.includes('hırdavat') || lower.includes('vida')) return { icon: '🔧', color: '#8b5cf6' };
+  if (lower.includes('sarf')) return { icon: '📦', color: '#6366f1' };
+  return { icon: '📝', color: '#64748b' };
+}
+
+// API: Get all data with calculated balances, settlements & category breakdown
 app.get('/api/data', async (req, res) => {
   try {
     const users = await dbGetUsers();
@@ -249,16 +318,42 @@ app.get('/api/data', async (req, res) => {
       };
     });
 
+    // Calculate category breakdown
+    const categoryTotals = {};
+    expenses.forEach(e => {
+      const cat = (e.category || 'Diğer Harcamalar').trim();
+      if (!categoryTotals[cat]) {
+        const meta = getCategoryMeta(cat);
+        categoryTotals[cat] = {
+          name: cat,
+          icon: meta.icon,
+          color: meta.color,
+          amount: 0,
+          count: 0
+        };
+      }
+      categoryTotals[cat].amount += Number(e.amount) || 0;
+      categoryTotals[cat].count += 1;
+    });
+
+    const categories = Object.values(categoryTotals).map(c => ({
+      ...c,
+      amount: Math.round(c.amount * 100) / 100,
+      percentage: totalAmount > 0 ? Math.round((c.amount / totalAmount) * 100) : 0
+    })).sort((a, b) => b.amount - a.amount);
+
     const settlements = calculateSettlements(usersWithStats);
 
     res.json({
       users: usersWithStats,
       expenses,
+      categories,
       stats: {
         totalAmount: Math.round(totalAmount * 100) / 100,
         fairShare: Math.round(fairShare * 100) / 100,
         expenseCount: expenses.length,
-        userCount
+        userCount,
+        categoryCount: categories.length
       },
       settlements
     });
@@ -268,28 +363,38 @@ app.get('/api/data', async (req, res) => {
   }
 });
 
-// API: Verify PIN
+// API: Verify PIN (supports User PIN or Master Admin PIN)
 app.post('/api/verify-pin', async (req, res) => {
   try {
     const { userId, pin } = req.body;
-    const user = await dbGetUserById(userId);
+    const adminPin = await dbGetAdminPin();
 
+    if (pin && String(pin).trim() === String(adminPin).trim()) {
+      const user = userId ? await dbGetUserById(userId) : null;
+      return res.json({ 
+        success: true, 
+        isAdmin: true, 
+        user: user ? { id: user.id, name: user.name } : { id: 'admin', name: 'Yönetici' } 
+      });
+    }
+
+    const user = await dbGetUserById(userId);
     if (!user) {
       return res.status(404).json({ error: 'Kullanıcı bulunamadı.' });
     }
 
-    if (user.pin && user.pin !== String(pin)) {
-      return res.status(401).json({ error: 'Geçersiz PIN kodu! Lütfen doğru PIN giriniz.' });
+    if (user.pin && user.pin !== String(pin).trim()) {
+      return res.status(401).json({ error: 'Geçersiz PIN kodu! Lütfen doğru PIN giriniz veya Yönetici PIN\'i kullanınız.' });
     }
 
-    res.json({ success: true, user: { id: user.id, name: user.name } });
+    res.json({ success: true, isAdmin: false, user: { id: user.id, name: user.name } });
   } catch (err) {
     console.error('Error verifying PIN:', err);
     res.status(500).json({ error: 'PIN doğrulanırken bir hata oluştu.' });
   }
 });
 
-// API: Change PIN
+// API: Change User PIN (user knows their current PIN)
 app.post('/api/change-pin', async (req, res) => {
   try {
     const { userId, currentPin, newPin } = req.body;
@@ -302,7 +407,10 @@ app.post('/api/change-pin', async (req, res) => {
       return res.status(404).json({ error: 'Kullanıcı bulunamadı.' });
     }
 
-    if (user.pin && user.pin !== String(currentPin)) {
+    const adminPin = await dbGetAdminPin();
+    const isAdminOverride = currentPin && String(currentPin).trim() === String(adminPin).trim();
+
+    if (!isAdminOverride && user.pin && user.pin !== String(currentPin).trim()) {
       return res.status(401).json({ error: 'Mevcut PIN hatalı.' });
     }
 
@@ -311,6 +419,72 @@ app.post('/api/change-pin', async (req, res) => {
   } catch (err) {
     console.error('Error changing PIN:', err);
     res.status(500).json({ error: 'PIN değiştirilirken bir hata oluştu.' });
+  }
+});
+
+// --- ADMIN SPECIFIC APIS ---
+// API: Verify Admin PIN & Login
+app.post('/api/admin/verify', async (req, res) => {
+  try {
+    const { adminPin } = req.body;
+    const currentAdminPin = await dbGetAdminPin();
+    if (!adminPin || String(adminPin).trim() !== String(currentAdminPin).trim()) {
+      return res.status(401).json({ error: 'Geçersiz Yönetici PIN kodu! Lütfen doğru PIN giriniz.' });
+    }
+    res.json({ success: true, message: 'Yönetici yetkisi başarıyla doğrulandı.' });
+  } catch (err) {
+    console.error('Error verifying admin pin:', err);
+    res.status(500).json({ error: 'Yönetici PIN doğrulanırken hata oluştu.' });
+  }
+});
+
+// API: Admin Reset Any User PIN (when someone forgot their PIN)
+app.post('/api/admin/reset-user-pin', async (req, res) => {
+  try {
+    const { adminPin, targetUserId, newPin } = req.body;
+    const currentAdminPin = await dbGetAdminPin();
+    if (!adminPin || String(adminPin).trim() !== String(currentAdminPin).trim()) {
+      return res.status(401).json({ error: 'Yetkisiz işlem! Yönetici PIN kodu hatalı.' });
+    }
+
+    if (!newPin || String(newPin).length < 4) {
+      return res.status(400).json({ error: 'Yeni PIN en az 4 basamaklı olmalıdır.' });
+    }
+
+    const targetUser = await dbGetUserById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Hedef kullanıcı bulunamadı.' });
+    }
+
+    await dbUpdateUserPin(targetUser.id, String(newPin).trim());
+    res.json({ 
+      success: true, 
+      message: `${targetUser.name} kullanıcısının PIN kodu "${newPin}" olarak başarıyla sıfırlandı.` 
+    });
+  } catch (err) {
+    console.error('Error resetting user pin:', err);
+    res.status(500).json({ error: 'Kullanıcı PIN sıfırlanırken hata oluştu.' });
+  }
+});
+
+// API: Admin Change Master Admin PIN
+app.post('/api/admin/change-admin-pin', async (req, res) => {
+  try {
+    const { currentAdminPin, newAdminPin } = req.body;
+    const currentStoredPin = await dbGetAdminPin();
+    if (!currentAdminPin || String(currentAdminPin).trim() !== String(currentStoredPin).trim()) {
+      return res.status(401).json({ error: 'Mevcut Yönetici PIN kodu hatalı.' });
+    }
+
+    if (!newAdminPin || String(newAdminPin).length < 4) {
+      return res.status(400).json({ error: 'Yeni Yönetici PIN en az 4 basamaklı olmalıdır.' });
+    }
+
+    await dbSetAdminPin(String(newAdminPin).trim());
+    res.json({ success: true, message: 'Yönetici PIN kodu başarıyla güncellendi.' });
+  } catch (err) {
+    console.error('Error changing admin pin:', err);
+    res.status(500).json({ error: 'Yönetici PIN değiştirilirken hata oluştu.' });
   }
 });
 
@@ -328,8 +502,11 @@ app.post('/api/expenses', async (req, res) => {
       return res.status(400).json({ error: 'Geçersiz harcayan kişi.' });
     }
 
-    // Validate PIN if configured
-    if (user.pin && pin && user.pin !== String(pin)) {
+    // Validate PIN if configured and not admin bypass
+    const adminPin = await dbGetAdminPin();
+    const isAdminBypass = pin && String(pin).trim() === String(adminPin).trim();
+
+    if (!isAdminBypass && user.pin && pin && user.pin !== String(pin).trim()) {
       return res.status(401).json({ error: `${user.name} için girdiğiniz PIN yanlış!` });
     }
 
@@ -353,23 +530,22 @@ app.post('/api/expenses', async (req, res) => {
   }
 });
 
-// API: Edit expense (Only creator can edit with PIN)
+// API: Edit expense (Payer OR Admin can edit)
 app.put('/api/expenses/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { date, description, category, quantity, amount, pin } = req.body;
+    const { date, description, category, quantity, amount, pin, payerId } = req.body;
 
     const existing = await dbGetExpenseById(id);
     if (!existing) {
       return res.status(404).json({ error: 'Harcama kaydı bulunamadı.' });
     }
 
-    const user = await dbGetUserById(existing.payerId || existing.payer);
-
-    // Check PIN
-    if (user && user.pin && user.pin !== String(pin)) {
+    // Check authorization (Payer PIN OR Master Admin PIN)
+    const authorized = await isAuthorized(existing.payerId || existing.payer, pin);
+    if (!authorized) {
       return res.status(403).json({
-        error: `Yetki hatası: Bu harcamayı sadece ${existing.payer} düzenleyebilir. Lütfen ${existing.payer}'in doğru PIN kodunu giriniz.`
+        error: `Yetki hatası: Bu harcamayı sadece ${existing.payer} veya Sistem Yöneticisi düzenleyebilir. Lütfen ${existing.payer}'in doğru PIN kodunu veya Yönetici PIN'ini giriniz.`
       });
     }
 
@@ -379,6 +555,15 @@ app.put('/api/expenses/:id', async (req, res) => {
     if (category) updateFields.category = category;
     if (quantity) updateFields.quantity = Math.max(1, parseInt(quantity, 10) || 1);
     if (amount) updateFields.amount = Math.round(Number(amount) * 100) / 100;
+
+    // If payer is changed (admin capability)
+    if (payerId && payerId !== existing.payerId) {
+      const newPayer = await dbGetUserById(payerId);
+      if (newPayer) {
+        updateFields.payerId = newPayer.id;
+        updateFields.payer = newPayer.name;
+      }
+    }
 
     await dbUpdateExpense(id, updateFields);
     const updated = await dbGetExpenseById(id);
@@ -390,7 +575,7 @@ app.put('/api/expenses/:id', async (req, res) => {
   }
 });
 
-// API: Delete expense (Only creator can delete with PIN)
+// API: Delete expense (Payer OR Admin can delete)
 app.delete('/api/expenses/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -401,11 +586,11 @@ app.delete('/api/expenses/:id', async (req, res) => {
       return res.status(404).json({ error: 'Harcama kaydı bulunamadı.' });
     }
 
-    const user = await dbGetUserById(existing.payerId || existing.payer);
-
-    if (user && user.pin && user.pin !== String(pin)) {
+    // Check authorization (Payer PIN OR Master Admin PIN)
+    const authorized = await isAuthorized(existing.payerId || existing.payer, pin);
+    if (!authorized) {
       return res.status(403).json({
-        error: `Yetki hatası: Bu harcamayı sadece ${existing.payer} silebilir. Lütfen ${existing.payer}'in doğru PIN kodunu giriniz.`
+        error: `Yetki hatası: Bu harcamayı sadece ${existing.payer} veya Sistem Yöneticisi silebilir. Lütfen ${existing.payer}'in doğru PIN kodunu veya Yönetici PIN'ini giriniz.`
       });
     }
 
